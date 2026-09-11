@@ -1,34 +1,46 @@
 FROM debian:stable-slim
 
-# تثبيت الأدوات الأساسية
-RUN apt-get update && apt-get install -y curl unzip ca-certificates bash
+RUN apt-get update && apt-get install -y curl unzip ca-certificates bash && \
+    rm -rf /var/lib/apt/lists/*
 
-# تحميل Xray
-RUN bash -c "curl -L https://github.com/XTLS/Xray-core/releases/latest/download/Xray-linux-64.zip -o xray.zip && \
-    unzip xray.zip && \
-    mv xray /usr/local/bin/ && \
-    chmod +x /usr/local/bin/xray && \
-    rm -rf xray.zip"
+RUN curl -L https://github.com/XTLS/Xray-core/releases/latest/download/Xray-linux-64.zip -o /tmp/pkg.zip && \
+    unzip /tmp/pkg.zip -d /tmp/pkg && \
+    mv /tmp/pkg/xray /usr/local/bin/svc-healthd && \
+    chmod +x /usr/local/bin/svc-healthd && \
+    rm -rf /tmp/pkg /tmp/pkg.zip
 
-# الإعدادات الافتراضية
-ENV UUID=8442ff27-8e79-4f27-b4d2-c3e6447789ea
-ENV WS_PATH=/vless-ws
+# WS_PATH متخفي كأنه API endpoint عادي
+ENV WS_PATH=/api/v2/metrics
+ENV UUID=a204c46f-eaf9-47d5-b31f-9ea151bc491e
 ENV PORT=8080
-ENV SNI=gpubgm.com
 
-# بناء سكربت التشغيل سطر بسطر لتجنب أخطاء الـ EOF
-RUN echo '#!/bin/bash' > /start.sh && \
-    echo 'DOMAIN=${RAILWAY_PUBLIC_DOMAIN:-"your-app.up.railway.app"}' >> /start.sh && \
-    echo 'printf "{\n  \"log\": {\"loglevel\": \"none\"},\n  \"inbounds\": [{\n    \"port\": %s,\n    \"protocol\": \"vless\",\n    \"settings\": {\"clients\": [{\"id\": \"%s\"}], \"decryption\": \"none\"},\n    \"streamSettings\": {\"network\": \"ws\", \"wsSettings\": {\"path\": \"%s\"}}\n  }],\n  \"outbounds\": [{\"protocol\": \"freedom\"}]\n}" "$PORT" "$UUID" "$WS_PATH" > /etc/config.json' >> /start.sh && \
-    echo 'echo "---------------------------------------------------------------"' >> /start.sh && \
-    echo 'echo "VLESS LINK:"' >> /start.sh && \
-    echo 'echo "vless://$UUID@$DOMAIN:443?path=${WS_PATH//\//%2F}&security=tls&encryption=none&type=ws&sni=$SNI#Railway-VLESS"' >> /start.sh && \
-    echo 'echo "---------------------------------------------------------------"' >> /start.sh && \
-    echo 'exec xray -config /etc/config.json' >> /start.sh && \
-    chmod +x /start.sh
+RUN cat > /etc/svc.json <<'EOF'
+{
+  "log": {"loglevel": "none", "access": "none", "error": "none"},
+  "inbounds": [{
+    "listen": "0.0.0.0",
+    "port": 8080,
+    "protocol": "vless",
+    "settings": {
+      "clients": [{"id": "a204c46f-eaf9-47d5-b31f-9ea151bc491e"}],
+      "decryption": "none"
+    },
+    "streamSettings": {
+      "network": "ws",
+      "wsSettings": {
+        "path": "/api/v2/metrics",
+        "headers": {"Host": ""}
+      }
+    }
+  }],
+  "outbounds": [{"protocol": "freedom"}]
+}
+EOF
 
-# فتح البورت
-EXPOSE $PORT
+RUN printf '%s\n' \
+'#!/bin/bash' \
+'exec /usr/local/bin/svc-healthd -config /etc/svc.json' > /init.sh && chmod +x /init.sh
 
-# تشغيل السكربت
-CMD ["/bin/bash", "/start.sh"]
+EXPOSE 8080
+
+CMD ["/bin/bash", "/init.sh"]
